@@ -1,41 +1,74 @@
 pipeline {
-    agent {
-        docker {
-            image 'python:3.9'
-            args '-v /var/run/docker.sock:/var/run/docker.sock'
-        }
-    }
-
+    agent any
+    
     environment {
-        DOCKER_IMAGE = 'kadirmalik457/21-04'
+        DOCKER_IMAGE = 'kadirmalik457/python-app'
+        DOCKER_TAG = 'latest'
+        // Store Docker Hub credentials in Jenkins (Manage Jenkins > Credentials)
+        DOCKER_CREDS = credentials('docker-hub-creds')
     }
-
+    
     stages {
-        stage('Clone') {
+        stage('Checkout') {
             steps {
-                git 'https://github.com/kadirmalik787/my-python-app.git'
+                git branch: 'main',
+                    url: 'https://github.com/kadirmalik787/my-python-app.git'
             }
         }
-
-        stage('Run App') {
-            steps {
-                sh 'python app.py'
-            }
-        }
-
+        
         stage('Build Docker Image') {
             steps {
-                sh 'docker build -t $DOCKER_IMAGE .'
-            }
-        }
-
-        stage('Push to DockerHub') {
-            steps {
-                withCredentials([usernamePassword(credentialsId: 'dockerhub-cred', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                    sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
-                    sh 'docker push $DOCKER_IMAGE'
+                script {
+                    // Build using the Dockerfile in your repo
+                    dockerImage = docker.build("${DOCKER_IMAGE}:${DOCKER_TAG}")
                 }
             }
+        }
+        
+        stage('Test Docker Image') {
+            steps {
+                script {
+                    // Run the container to verify it works
+                    dockerImage.inside {
+                        sh 'python --version'
+                        sh 'python app.py'
+                    }
+                }
+            }
+        }
+        
+        stage('Push to Docker Hub') {
+            steps {
+                script {
+                    docker.withRegistry('https://registry.hub.docker.com', 'dockerhub-creds') {
+                        dockerImage.push()
+                        dockerImage.push("${DOCKER_TAG}")
+                    }
+                }
+            }
+        }
+        
+        stage('Cleanup') {
+            steps {
+                script {
+                    // Remove built image to save space
+                    sh 'docker rmi ${DOCKER_IMAGE}:${DOCKER_TAG} || true'
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            echo 'Pipeline completed - check Docker Hub for your image!'
+        }
+        success {
+            slackSend channel: '#jenkins',
+                     message: "SUCCESS: ${env.JOB_NAME} - ${env.BUILD_NUMBER}"
+        }
+        failure {
+            slackSend channel: '#jenkins',
+                     message: "FAILED: ${env.JOB_NAME} - ${env.BUILD_NUMBER}"
         }
     }
 }
